@@ -37,32 +37,36 @@
             :key="t.id"
             :class="['sidebar-task-item', { 'sidebar-task-running': t.status === 'running' }]"
           >
-            <div class="sidebar-task-info">
-              <div class="sidebar-task-id">{{ t.id }}</div>
-              <div class="sidebar-task-url" :title="t.urls[0]">{{ t.urls[0] }}</div>
+            <div class="sidebar-task-row">
+              <div class="sidebar-task-url" :title="t.urls.join('\n')">{{ t.label }}</div>
+              <span class="sidebar-task-pct">
+                {{ t.progress }}%<template v-if="t.fileCount > 1"> · {{ t.fileDone }}/{{ t.fileCount }}</template>
+              </span>
             </div>
-            <div class="sidebar-task-progress">
+            <div class="sidebar-task-row">
               <el-progress
+                class="sidebar-task-bar"
                 :percentage="t.progress"
-                :show-text="true"
+                :show-text="false"
                 :color="t.status === 'running' ? ['#e892d0', '#9d7ce8'] : '#c9a7e8'"
                 :stroke-width="6"
-                :width="70"
               />
+              <span class="sidebar-task-meta">
+                <template v-if="t.status === 'running'">{{ formatSize(t.speed) }}/s</template>
+                <template v-else>已结束</template>
+              </span>
+              <div class="sidebar-task-actions">
+                <el-button
+                  size="small"
+                  type="danger"
+                  :disabled="t.status !== 'running'"
+                  @click="stopTask(t.id)"
+                  :icon="Close"
+                  circle
+                  title="停止"
+                />
+              </div>
             </div>
-            <div class="sidebar-task-meta">
-              <span v-if="t.status === 'running'">{{ formatSize(t.speed) }}/s</span>
-              <span v-if="t.eta > 0">ETA {{ t.eta }}s</span>
-              <span v-if="t.status === 'stopped'">已结束</span>
-            </div>
-            <el-button
-              size="small"
-              type="danger"
-              :disabled="t.status !== 'running'"
-              @click="stopTask(t.id)"
-              :icon="Close"
-              circle
-            />
           </div>
         </div>
       </div>
@@ -115,8 +119,11 @@ interface Task {
   id: string;
   urls: string[];
   dir: string;
+  label: string;
   status: "running" | "stopped";
-  progress: number; // 0-100
+  progress: number; // 0-100，批量时为整体进度
+  fileCount: number;
+  fileDone: number;
   speed: number; // KiB/s
   eta: number; // 秒
   peers: number;
@@ -141,6 +148,18 @@ function formatSize(kbps: number) {
 
 function findTask(id: string) {
   return tasks.find((t) => t.id === id);
+}
+
+// 从链接提取短名：URL 取文件名，磁力取标识，兜底截断
+function shortLabel(url: string): string {
+  if (url.startsWith("magnet:")) return "磁力链接";
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split("/").filter(Boolean).pop();
+    return last ? decodeURIComponent(last) : u.hostname;
+  } catch {
+    return url.length > 30 ? url.slice(0, 30) + "…" : url;
+  }
 }
 
 async function stopTask(id: string) {
@@ -173,8 +192,11 @@ onMounted(async () => {
       id,
       urls,
       dir,
+      label: shortLabel(urls[0]),
       status: "running",
       progress: 0,
+      fileCount: urls.length,
+      fileDone: 0,
       speed: 0,
       eta: 0,
       peers: 0,
@@ -189,7 +211,9 @@ onMounted(async () => {
     const { id, stats } = payload;
     const t = findTask(id);
     if (!t) return;
-    t.progress = Math.round(stats.percent);
+    // 批量时用 Rust 侧汇总的整体进度，单文件时与 percent 一致
+    t.progress = Math.round(stats.overall_percent ?? stats.percent);
+    t.fileDone = stats.files_done ?? 0;
     t.speed = stats.speed_kbps;
     t.eta = stats.eta_sec;
     t.peers = stats.peers;
@@ -336,22 +360,25 @@ body {
   margin-bottom: 6px;
 }
 .sidebar-task-count { color: #e892d0; }
-.sidebar-task-items { display: flex; flex-direction: column-reverse; gap: 5px; }
+.sidebar-task-items { display: flex; flex-direction: column-reverse; gap: 5px; overflow-x: hidden; }
 .sidebar-task-item {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 8px; border-radius: 8px;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px 8px; border-radius: 10px;
   background: rgba(255,255,255,.45);
   border: 1px solid rgba(255,255,255,.5);
+  min-width: 0;
 }
 .sidebar-task-item.sidebar-task-running {
   border-color: #e892d0;
   background: rgba(232,146,208,.12);
 }
-.sidebar-task-info { flex: 1; min-width: 0; }
-.sidebar-task-id { font-family: Consolas, monospace; font-size: 10px; color: #9a8ab5; }
-.sidebar-task-url { font-size: 11px; color: #6b4d9e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
-.sidebar-task-progress { flex: 0 0 76px; }
-.sidebar-task-meta { flex: 0 0 90px; font-size: 10px; color: #9a8ab5; line-height: 1.3; }
+.sidebar-task-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sidebar-task-url { flex: 1; min-width: 0; font-size: 11px; color: #6b4d9e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-task-pct { flex-shrink: 0; font-size: 11px; color: #9a8ab5; font-family: Consolas, monospace; }
+.sidebar-task-bar { flex: 1; min-width: 0; }
+.sidebar-task-meta { flex: 0 0 56px; font-size: 10px; color: #9a8ab5; text-align: right; overflow: hidden; white-space: nowrap; }
+.sidebar-task-actions { flex-shrink: 0; display: flex; gap: 4px; }
+.sidebar-task-actions .el-button { width: 20px; height: 20px; padding: 0; margin-left: 0 !important; }
 
 /* 状态：aria2c 已就绪 */
 .status { margin-top: auto; padding: 12px; }

@@ -109,7 +109,7 @@ struct ProgressStats {
 
 fn parse_size(s: &str) -> Option<f64> {
     let s = s.trim().to_lowercase();
-    let (num, unit) = match s.rfind(|c: char| !c.is_ascii_digit() && c != '.') {
+    let (num, unit) = match s.find(|c: char| !c.is_ascii_digit() && c != '.') {
         Some(i) => (&s[..i], &s[i..]),
         None => (s.as_str(), ""),
     };
@@ -133,8 +133,8 @@ fn parse_progress_line(line: &str) -> Option<ProgressStats> {
 
     let dl_re = Regex::new(r"(\d+(?:\.\d+)?)(\w+)/(\d+(?:\.\d+)?)(\w+)").ok()?;
     let m = dl_re.captures(body)?;
-    let downloaded = parse_size(&m[2])? * m[1].parse::<f64>().ok()?;
-    let total = parse_size(&m[4])? * m[3].parse::<f64>().ok()?;
+    let downloaded = parse_size(&format!("{}{}", &m[1], &m[2]))?;
+    let total = parse_size(&format!("{}{}", &m[3], &m[4]))?;
     let percent = if total > 0.0 { (downloaded / total * 100.0).min(100.0) } else { 0.0 };
 
     let dl_speed_re = Regex::new(r"DL:([^\s]+)").ok()?;
@@ -183,17 +183,9 @@ struct DownloadState {
     next_id: Mutex<u64>,
 }
 
-#[tauri::command]
-fn start_download(
-    app: AppHandle,
-    state: State<'_, DownloadState>,
-    urls: Vec<String>,
-) -> Result<String, String> {
-    let mut id_guard = state.next_id.lock().map_err(|e| e.to_string())?;
-    let id = format!("task_{}", *id_guard);
-    *id_guard += 1;
-    drop(id_guard);
-
+/// 构建并启动 aria2c 子进程，接管 stdout/stderr/退出监听，登记到任务表。
+/// 返回下载目录（供事件载荷使用）。
+fn spawn_aria2(app: &AppHandle, id: &str, urls: &[String]) -> Result<String, String> {
     let aria2 = find_aria2(app.clone())?;
     let s = load_settings(app.clone());
 
@@ -219,7 +211,7 @@ fn start_download(
         let args: Vec<&str> = s.extra_args.split_whitespace().collect();
         cmd.args(args);
     }
-    for u in &urls {
+    for u in urls {
         cmd.arg(u);
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -230,33 +222,46 @@ fn start_download(
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    // 向前端发送开始事件
-    let payload = serde_json::json!({ "id": id, "urls": urls, "dir": dir }).to_string();
-    emit_event(&app, "download-started", &payload);
-
     // 存入任务表
     let entry = DownloadEntry {
         child: Mutex::new(Some(child)),
     };
-    state
+    app.state::<DownloadState>()
         .tasks
         .lock()
         .map_err(|e| e.to_string())?
-        .insert(id.clone(), entry);
+        .insert(id.to_string(), entry);
 
     // ---------- stdout 线程（日志 + 进度统计）----------
     if let Some(stdout) = stdout {
         let app_s = app.clone();
-        let id_s = id.clone();
+        let id_s = id.to_string();
+        let file_count = urls.len();
         std::thread::spawn(move || {
+            use regex::Regex;
+            // 批量下载时 aria2c 每个文件一行进度，按 GID 分别记录再汇总成整体进度
+            let gid_re = Regex::new(r"\[#(\S+)\s").expect("gid regex");
+            let mut gid_pct: HashMap<String, f64> = HashMap::new();
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
                 emit_log(&app_s, &id_s, &line);
                 if let Some(stats) = parse_progress_line(&line) {
+                    if let Some(cap) = gid_re.captures(&line) {
+                        gid_pct.insert(cap[1].to_string(), stats.percent);
+                    }
+                    let overall = if file_count > 0 {
+                        (gid_pct.values().sum::<f64>() / file_count as f64).min(100.0)
+                    } else {
+                        stats.percent
+                    };
+                    let done = gid_pct.values().filter(|p| **p >= 100.0).count();
                     let payload = serde_json::json!({
                         "id": id_s,
                         "stats": {
                             "percent": stats.percent,
+                            "overall_percent": overall,
+                            "files_done": done,
+                            "file_count": file_count,
                             "downloaded_mb": stats.downloaded_mb,
                             "total_mb": stats.total_mb,
                             "speed_kbps": stats.speed_kbps,
@@ -274,7 +279,7 @@ fn start_download(
     // ---------- stderr 线程（只记日志）----------
     if let Some(stderr) = stderr {
         let app_e = app.clone();
-        let id_e = id.clone();
+        let id_e = id.to_string();
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
@@ -285,18 +290,24 @@ fn start_download(
 
     // ---------- 等待线程（自然退出清理）----------
     let app_w = app.clone();
-    let id_w = id.clone();
+    let id_w = id.to_string();
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(500));
-            let mut exit_loop = false;
-            {
-                let state = app_w.state::<DownloadState>();
-                let mut tasks = match state.tasks.lock() {
-                    Ok(g) => g,
-                    Err(_) => break,
-                };
-                let entry = match tasks.get_mut(&id_w) {
+            let state = app_w.state::<DownloadState>();
+            let mut tasks = match state.tasks.lock() {
+                Ok(g) => g,
+                Err(_) => break,
+            };
+            // 第一阶段：只读判定（entry 借用 tasks，期间不能 remove）
+            enum Outcome {
+                Running,
+                Finished(String),
+                Failed(String),
+                Gone,
+            }
+            let outcome = {
+                let entry = match tasks.get(&id_w) {
                     Some(e) => e,
                     None => break,
                 };
@@ -306,27 +317,51 @@ fn start_download(
                 };
                 match child_guard.as_mut() {
                     Some(c) => match c.try_wait() {
-                        Ok(Some(status)) => {
-                            let payload = serde_json::json!({ "id": id_w, "status": format!("{status}") }).to_string();
-                            emit_event(&app_w, "download-exit", &payload);
-                            *child_guard = None;
-                            exit_loop = true;
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            emit_log(&app_w, &id_w, &format!("[错误] {e}"));
-                            *child_guard = None;
-                            exit_loop = true;
-                        }
+                        Ok(Some(status)) => Outcome::Finished(format!("{status}")),
+                        Ok(None) => Outcome::Running,
+                        Err(e) => Outcome::Failed(e.to_string()),
                     },
-                    None => exit_loop = true,
+                    None => Outcome::Gone,
                 }
-            } // 所有锁在此释放
-            if exit_loop {
-                break;
+            };
+            // 第二阶段：entry/child 借用已释放，可安全移除
+            match outcome {
+                Outcome::Running => {}
+                Outcome::Finished(status) => {
+                    let payload = serde_json::json!({ "id": id_w, "status": status }).to_string();
+                    emit_event(&app_w, "download-exit", &payload);
+                    tasks.remove(&id_w);
+                    break;
+                }
+                Outcome::Failed(e) => {
+                    emit_log(&app_w, &id_w, &format!("[错误] {e}"));
+                    tasks.remove(&id_w);
+                    break;
+                }
+                Outcome::Gone => break,
             }
         }
     });
+
+    Ok(dir)
+}
+
+#[tauri::command]
+fn start_download(
+    app: AppHandle,
+    state: State<'_, DownloadState>,
+    urls: Vec<String>,
+) -> Result<String, String> {
+    let mut id_guard = state.next_id.lock().map_err(|e| e.to_string())?;
+    let id = format!("task_{}", *id_guard);
+    *id_guard += 1;
+    drop(id_guard);
+
+    let dir = spawn_aria2(&app, &id, &urls)?;
+
+    // 向前端发送开始事件
+    let payload = serde_json::json!({ "id": id, "urls": urls, "dir": dir }).to_string();
+    emit_event(&app, "download-started", &payload);
 
     Ok(id)
 }

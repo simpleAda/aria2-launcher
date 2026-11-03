@@ -66,6 +66,25 @@ const currentTaskId = ref<string | null>(null);
 // 下载速度/ETA 时序数据：按任务 id 分组，每个任务不同颜色
 const chartDatasets = reactive<Record<string, { time: string[]; speed: number[]; eta: number[] }>>({});
 
+// 任务 id -> 链接短名（图表图例用，与侧栏一致）
+const taskLabels: Record<string, string> = {};
+
+function shortLabel(url: string): string {
+  if (url.startsWith("magnet:")) return "磁力链接";
+  try {
+    const u = new URL(url);
+    const last = u.pathname.split("/").filter(Boolean).pop();
+    return last ? decodeURIComponent(last) : u.hostname;
+  } catch {
+    return url.length > 30 ? url.slice(0, 30) + "…" : url;
+  }
+}
+
+function labelOf(id: string): string {
+  const l = taskLabels[id] ?? id;
+  return l.length > 14 ? l.slice(0, 14) + "…" : l;
+}
+
 const taskColors: Record<string, string> = {};
 const colorPalette = ["#e892d0", "#9d7ce8", "#ff9ff3", "#a29bfe", "#81ecec", "#55efc4", "#ffeaa7", "#fab1a0"];
 let colorIndex = 0;
@@ -134,6 +153,7 @@ function updateChart() {
 
   for (const id of ids) {
     const d = chartDatasets[id];
+    const label = labelOf(id);
     const color = getColorForTask(id);
     const speedMap = new Map<string, number>();
     for (let i = 0; i < d.time.length; i++) speedMap.set(d.time[i], d.speed[i]);
@@ -143,7 +163,7 @@ function updateChart() {
     if (d.speed.some((v) => v > 0)) hasData = true;
 
     speedSeries.push({
-      name: `速度 - ${id}`,
+      name: `速度 - ${label}`,
       type: "line",
       smooth: true,
       yAxisIndex: 0,
@@ -159,7 +179,7 @@ function updateChart() {
       z: 2,
     });
     etaSeries.push({
-      name: `ETA - ${id}`,
+      name: `ETA - ${label}`,
       type: "line",
       smooth: true,
       yAxisIndex: 1,
@@ -209,7 +229,7 @@ function updateChart() {
       show: ids.length > 0,
       textStyle: { color: "#9a8ab5", fontSize: 10 },
       bottom: 10,
-      data: ids.flatMap((id) => [`速度 - ${id}`, `ETA - ${id}`]),
+      data: ids.flatMap((id) => [`速度 - ${labelOf(id)}`, `ETA - ${labelOf(id)}`]),
     },
   });
 
@@ -246,6 +266,7 @@ onMounted(async () => {
   unlistenStarted = await listen<string>("download-started", (ev) => {
     const payload = JSON.parse(ev.payload);
     currentTaskId.value = payload.id;
+    if (payload.urls?.[0]) taskLabels[payload.id] = shortLabel(payload.urls[0]);
     // 为新任务准备数据集
     if (!chartDatasets[payload.id]) {
       chartDatasets[payload.id] = { time: [], speed: [], eta: [] };
