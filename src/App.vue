@@ -425,20 +425,23 @@ body {
 }
 .el-message .el-message__content { color: #4a3a5c !important; }
 
-/* 滑块百分比气泡：透明玻璃 + 深色粗体字（两条滑块同一类名，一并生效）
-   注意必须带 .is-light 才能拼过 EP 自带的双类规则 */
-.el-tooltip__popper.is-light, .el-slider__popper.is-light,
-.el-tooltip__popper.is-dark, .el-slider__popper.is-dark {
-  background: rgba(255, 255, 255, .5) !important;
+/* 弹出层底色变量在 .el-popper 层级覆盖（与 EP 同级、后加载者胜），
+   EP 的 .el-popper.is-dark 底色吃 --el-popper-bg-color-dark，
+   文字吃 --el-bg-color —— 全部在元素级改写成玻璃风 */
+.el-popper {
+  --el-popper-bg-color-dark: rgba(255, 255, 255, .55);
+  --el-popper-bg-color-light: rgba(255, 255, 255, .45);
+  --el-bg-color: #4a3a5c;                 /* is-dark 的文字色 */
+  --el-border-color-light: rgba(255, 255, 255, .5);
   backdrop-filter: blur(12px) saturate(1.4);
+}
+.el-popper.is-dark {
   color: #4a3a5c !important;
   font-weight: 700;
-  border: 1px solid rgba(255, 255, 255, .5) !important;
+  border-color: rgba(255, 255, 255, .5) !important;
 }
-.el-tooltip__popper.is-light .el-popper__arrow:before,
-.el-slider__popper.is-light .el-popper__arrow:before,
-.el-tooltip__popper.is-dark .el-popper__arrow:before,
-.el-slider__popper.is-dark .el-popper__arrow:before {
+.el-popper.is-dark > .el-popper__arrow:before,
+.el-popper.is-light > .el-popper__arrow:before {
   background: rgba(255, 255, 255, .5) !important;
   border-color: rgba(255, 255, 255, .5) !important;
 }
