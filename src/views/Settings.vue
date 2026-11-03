@@ -53,12 +53,38 @@
           <div class="hint hint-plain">原样追加到 aria2c 命令末尾，支持引号包裹的参数</div>
         </el-form-item>
       </el-form>
+    </div>
 
-      <div class="row" style="margin-top: 8px">
-        <el-button type="primary" round class="pink-btn" :icon="Check" @click="save">保存设置</el-button>
-        <el-button round :icon="RefreshLeft" @click="resetDefaults">恢复默认</el-button>
-        <el-button text :icon="Search" @click="recheck" style="margin-left: auto">重新检测 aria2c</el-button>
-      </div>
+    <!-- 界面背景 -->
+    <div class="panel" style="max-width: 560px">
+      <div class="panel-title">界面背景 ✿</div>
+      <el-form label-position="top" size="large">
+        <el-form-item label="背景图片">
+          <div class="row">
+            <el-input v-model="s.bg_image" placeholder="留空 = 默认渐变背景" clearable />
+            <el-button :icon="FolderOpened" @click="browseBg">浏览…</el-button>
+            <el-button :icon="Delete" :disabled="!s.bg_image" @click="s.bg_image = ''">清除</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="图片不透明度">
+          <el-slider
+            v-model="s.bg_opacity"
+            :min="0" :max="1" :step="0.05"
+            :disabled="!s.bg_image"
+            :format-tooltip="fmtPct"
+          />
+        </el-form-item>
+        <el-form-item label="页面整体不透明度（越低背景越透）">
+          <el-slider v-model="s.ui_opacity" :min="0.2" :max="1" :step="0.05" :format-tooltip="fmtPct" />
+        </el-form-item>
+      </el-form>
+      <div class="hint hint-plain">保存后立即生效</div>
+    </div>
+
+    <!-- 保存：作用于以上所有设置 -->
+    <div class="row" style="max-width: 560px; margin-top: 4px">
+      <el-button type="primary" round class="pink-btn" :icon="Check" @click="save">保存设置</el-button>
+      <el-button round :icon="RefreshLeft" @click="resetDefaults">恢复默认</el-button>
     </div>
   </div>
 </template>
@@ -68,7 +94,7 @@ import { reactive, ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus";
-import { FolderOpened, Check, RefreshLeft, Search } from "@element-plus/icons-vue";
+import { FolderOpened, Check, RefreshLeft, Delete } from "@element-plus/icons-vue";
 
 interface Settings {
   aria2_path: string;
@@ -78,6 +104,9 @@ interface Settings {
   piece_length: string;
   dir: string;
   extra_args: string;
+  bg_image: string;
+  bg_opacity: number;
+  ui_opacity: number;
 }
 
 const s = reactive<Settings>({
@@ -88,7 +117,12 @@ const s = reactive<Settings>({
   piece_length: "1M",
   dir: "",
   extra_args: "",
+  bg_image: "",
+  bg_opacity: 0.5,
+  ui_opacity: 1,
 });
+
+const fmtPct = (v: number) => Math.round(v * 100) + "%";
 
 const found = ref(false);
 const aria2Hint = ref("");
@@ -145,25 +179,33 @@ async function browseDir() {
   const picked = await open({ directory: true, multiple: false });
   if (typeof picked === "string") s.dir = picked;
 }
+
+async function browseBg() {
+  const picked = await open({
+    multiple: false,
+    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
+  });
+  if (typeof picked === "string") s.bg_image = picked;
+}
 </script>
 
 <style scoped>
 .row { display: flex; gap: 8px; width: 100%; }
 .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .hint { margin-top: 4px; display: flex; align-items: center; gap: 8px; }
-.hint-plain { margin-top: 4px; font-size: 12px; color: #9a8ab5; }
-.hint-text { font-size: 12px; color: #9a8ab5; word-break: break-all; }
+.hint-plain { margin-top: 4px; font-size: 12px; color: rgba(255, 255, 255, .8); }
+.hint-text { font-size: 12px; color: rgba(255, 255, 255, .8); word-break: break-all; }
 
-/* 主按钮二次元渐变 */
+/* 主按钮：淡粉玻璃，与幽灵风统一 */
 .pink-btn {
-  background: linear-gradient(90deg, #e892d0, #9d7ce8) !important;
-  border: none !important;
-  box-shadow: 0 4px 14px #c58ee066 !important;
-  transition: transform .15s ease, box-shadow .15s ease !important;
+  background: rgba(232, 146, 208, .28) !important;
+  border: 1px solid rgba(255, 255, 255, .3) !important;
+  color: #fff !important;
+  transition: all .2s ease !important;
 }
 .pink-btn:hover:not(:disabled) {
-  transform: translateY(-2px) scale(1.03);
-  box-shadow: 0 6px 20px #c58ee088 !important;
+  background: rgba(232, 146, 208, .42) !important;
+  transform: translateY(-1px);
 }
 .pink-btn:active:not(:disabled) { transform: translateY(0) scale(.98); }
 </style>

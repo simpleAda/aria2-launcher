@@ -20,6 +20,9 @@ struct Settings {
     piece_length: String,
     dir: String,
     extra_args: String,
+    bg_image: String,
+    bg_opacity: f64,
+    ui_opacity: f64,
 }
 
 impl Default for Settings {
@@ -32,6 +35,9 @@ impl Default for Settings {
             piece_length: "1M".into(),
             dir: String::new(),
             extra_args: String::new(),
+            bg_image: String::new(),
+            bg_opacity: 0.5,
+            ui_opacity: 1.0,
         }
     }
 }
@@ -55,7 +61,10 @@ fn load_settings(app: AppHandle) -> Settings {
 fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
     let path = settings_file(&app);
     let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| e.to_string())
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    // 通知前端即时应用（背景图等新设置免重启）
+    let _ = app.emit("settings-changed", serde_json::to_string(&settings).unwrap_or_default());
+    Ok(())
 }
 
 #[tauri::command]

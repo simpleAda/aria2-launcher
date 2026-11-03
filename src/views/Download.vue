@@ -46,7 +46,12 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { VideoPlay, Delete } from "@element-plus/icons-vue";
-import * as echarts from "echarts";
+// 按需引入，冷启动不加载整个 echarts
+import * as echarts from "echarts/core";
+import { LineChart } from "echarts/charts";
+import { GridComponent, TooltipComponent, LegendComponent } from "echarts/components";
+import { CanvasRenderer } from "echarts/renderers";
+echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 
 const links = ref("");
 const logEl = ref<HTMLElement | null>(null);
@@ -321,16 +326,16 @@ onUnmounted(() => {
 <style scoped>
 .actions { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
 
-/* 主按钮二次元渐变 */
+/* 主按钮：淡粉玻璃，与幽灵风统一 */
 .pink-btn {
-  background: linear-gradient(90deg, #e892d0, #9d7ce8) !important;
-  border: none !important;
-  box-shadow: 0 4px 14px #c58ee066 !important;
-  transition: transform .15s ease, box-shadow .15s ease !important;
+  background: rgba(232, 146, 208, .28) !important;
+  border: 1px solid rgba(255, 255, 255, .3) !important;
+  color: #fff !important;
+  transition: all .2s ease !important;
 }
 .pink-btn:hover:not(:disabled) {
-  transform: translateY(-2px) scale(1.03);
-  box-shadow: 0 6px 20px #c58ee088 !important;
+  background: rgba(232, 146, 208, .42) !important;
+  transform: translateY(-1px);
 }
 .pink-btn:active:not(:disabled) { transform: translateY(0) scale(.98); }
 

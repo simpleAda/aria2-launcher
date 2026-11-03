@@ -6,7 +6,21 @@
     <title>aria2 启动器</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <!-- Vue 挂载前的加载动画，挂载后自动被替换 -->
+      <div style="
+        height: 100vh; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 16px;
+        background: linear-gradient(135deg, #ffeaf5 0%, #e8f1ff 55%, #f1eaff 100%);
+        font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+      ">
+        <div style="font-size: 42px; animation: splash-spin 1.6s linear infinite">🌸</div>
+        <div style="font-size: 14px; color: #7b5aa6; letter-spacing: 2px">加载中…</div>
+      </div>
+      <style>
+        @keyframes splash-spin { to { transform: rotate(360deg) } }
+      </style>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
