@@ -1,5 +1,8 @@
 <template>
-  <div class="layout" :style="glassVars">
+  <div class="layout" :style="glassVars" @contextmenu="onContextMenu" @pointerdown="closeCtx">
+    <!-- 背景填充层：用同一张图 cover + 重模糊填满屏幕，
+         contain 留白处自动融合，适配任意图片（仿 iOS/macOS 壁纸） -->
+    <div v-if="bgImage" class="bg-fill" :style="bgFillStyle" aria-hidden="true"></div>
     <!-- 背景图片层（设置页可换图、调透明度） -->
     <div class="bg-layer" :style="bgStyle" aria-hidden="true"></div>
 
@@ -8,98 +11,131 @@
       <span v-for="n in 14" :key="n" class="petal" :style="petalStyle(n)">🌸</span>
     </div>
 
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-icon">
-          <el-icon :size="22" color="#fff"><Download /></el-icon>
-        </div>
-        <div>
-          <div class="brand-name">aria2 启动器</div>
-          <div class="brand-sub"> sakura downloader ✿</div>
-        </div>
-      </div>
+    <!-- 下载窗口 -->
+    <MacWindow v-if="wins.download.open && !wins.download.min" :win="wins.download" title="下载"
+      @close="wins.download.open = false" @minimize="wins.download.min = true" @focus="focusWin('download')">
+      <DownloadView />
+    </MacWindow>
 
-      <el-menu :default-active="route.path" router class="menu">
-        <el-menu-item index="/">
-          <el-icon><VideoPlay /></el-icon><span>下载</span>
-        </el-menu-item>
-        <el-menu-item index="/settings">
-          <el-icon><Setting /></el-icon><span>设置</span>
-        </el-menu-item>
-      </el-menu>
-
-      <!-- 下载任务列表：贴在 aria2c 状态上方，从下往上展开 -->
-      <div class="sidebar-task-list" v-if="tasks.length">
-        <div class="sidebar-task-header">
-          <span class="sidebar-task-title">下载任务</span>
-          <span class="sidebar-task-count">{{ activeTaskCount }} / {{ tasks.length }}</span>
+    <!-- 任务窗口 -->
+    <MacWindow v-if="wins.tasks.open && !wins.tasks.min" :win="wins.tasks" title="下载任务"
+      @close="wins.tasks.open = false" @minimize="wins.tasks.min = true" @focus="focusWin('tasks')">
+      <div class="task-win">
+        <div class="task-win-head">
+          <span>进行中 {{ activeTaskCount }}</span>
+          <span>共 {{ tasks.length }}</span>
         </div>
-        <div class="sidebar-task-items">
-          <div
-            v-for="t in tasks"
-            :key="t.id"
-            :class="['sidebar-task-item', { 'sidebar-task-running': t.status === 'running' }]"
-          >
-            <div class="sidebar-task-row">
-              <div class="sidebar-task-url" :title="t.urls.join('\n')">{{ t.label }}</div>
-              <span class="sidebar-task-pct">
-                {{ t.progress }}%<template v-if="t.fileCount > 1"> · {{ t.fileDone }}/{{ t.fileCount }}</template>
-              </span>
-            </div>
-            <div class="sidebar-task-row">
-              <el-progress
-                class="sidebar-task-bar"
-                :percentage="t.progress"
-                :show-text="false"
-                :color="t.status === 'running' ? ['#e892d0', '#9d7ce8'] : '#c9a7e8'"
-                :stroke-width="6"
-              />
-              <span class="sidebar-task-meta">
-                <template v-if="t.status === 'running'">{{ formatSize(t.speed) }}/s</template>
-                <template v-else>已结束</template>
-              </span>
-              <div class="sidebar-task-actions">
-                <el-button
-                  size="small"
-                  type="danger"
-                  :disabled="t.status !== 'running'"
-                  @click="stopTask(t.id)"
-                  :icon="Close"
-                  circle
-                  title="停止"
-                />
-              </div>
-            </div>
+        <div v-if="!tasks.length" class="task-win-empty">还没有任务，去「下载」窗口添加吧 🌸</div>
+        <div v-for="t in tasks" :key="t.id" class="sidebar-task-item"
+             :class="{ 'sidebar-task-running': t.status === 'running' }">
+          <div class="sidebar-task-row">
+            <div class="sidebar-task-url" :title="t.urls.join('\n')">{{ t.label }}</div>
+            <span class="sidebar-task-pct">
+              {{ t.progress }}%<template v-if="t.fileCount > 1"> · {{ t.fileDone }}/{{ t.fileCount }}</template>
+            </span>
+          </div>
+          <div class="sidebar-task-row">
+            <el-progress class="sidebar-task-bar" :percentage="t.progress" :show-text="false"
+              :color="t.status === 'running' ? ['#e892d0', '#9d7ce8'] : '#c9a7e8'" :stroke-width="6" />
+            <span class="sidebar-task-meta">
+              <template v-if="t.status === 'running'">{{ formatSize(t.speed) }}/s</template>
+              <template v-else>已结束</template>
+            </span>
+            <el-button size="small" type="danger" :disabled="t.status !== 'running'"
+              @click="stopTask(t.id)" :icon="Close" circle title="停止" />
           </div>
         </div>
       </div>
+    </MacWindow>
 
-      <div class="status">
-        <div class="status-card" :class="[ok ? 'ok' : 'warn', { checking }]"
-             title="点击重新检测 aria2c" @click="recheckAria2">
-          <span class="status-dot"></span>
-          {{ checking ? "检测中…" : ok ? "aria2c 已就绪" : "未找到 aria2c" }}
-          <el-icon class="recheck-icon" :class="{ spin: checking }" :size="13"><Refresh /></el-icon>
-        </div>
+    <!-- 设置窗口 -->
+    <MacWindow v-if="wins.settings.open && !wins.settings.min" :win="wins.settings" title="设置"
+      @close="wins.settings.open = false" @minimize="wins.settings.min = true" @focus="focusWin('settings')">
+      <SettingsView />
+    </MacWindow>
+
+    <!-- 自定义右键菜单 -->
+    <div v-if="ctx.show" class="ctx-menu" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
+         @pointerdown.stop @contextmenu.prevent>
+      <div class="ctx-item" @click="dockClick('download'); closeCtx()">下载</div>
+      <div class="ctx-item" @click="dockClick('tasks'); closeCtx()">下载任务</div>
+      <div class="ctx-item" @click="dockClick('settings'); closeCtx()">设置</div>
+      <div class="ctx-sep"></div>
+      <div class="ctx-item" @click="reloadApp">重新加载</div>
+    </div>
+
+    <!-- Dock -->
+    <div class="dock" :style="{ zoom: dockZoom }">
+      <div class="dock-item" title="下载" @click="dockClick('download')">
+        <el-icon :size="26"><VideoPlay /></el-icon>
+        <i v-if="wins.download.open" class="dock-dot"></i>
       </div>
-    </aside>
-
-    <main class="content">
-      <RouterView />
-    </main>
+      <div class="dock-item" title="下载任务" @click="dockClick('tasks')">
+        <el-icon :size="26"><List /></el-icon>
+        <i v-if="wins.tasks.open" class="dock-dot"></i>
+      </div>
+      <div class="dock-item" title="设置" @click="dockClick('settings')">
+        <el-icon :size="26"><Setting /></el-icon>
+        <i v-if="wins.settings.open" class="dock-dot"></i>
+      </div>
+      <div class="dock-sep"></div>
+      <div class="dock-status" :class="[ok ? 'ok' : 'warn', { checking }]"
+           title="aria2c 状态，点击重新检测" @click="recheckAria2">
+        <span class="status-dot"></span>
+        {{ checking ? "检测中…" : ok ? "aria2c 已就绪" : "未找到 aria2c" }}
+        <el-icon class="recheck-icon" :class="{ spin: checking }" :size="13"><Refresh /></el-icon>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, watch } from "vue";
-import { RouterView, useRoute, useRouter } from "vue-router";
+import { ref, reactive, onMounted, computed } from "vue";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { ElMessage } from "element-plus";
-import { Download, VideoPlay, Setting, Close, Refresh } from "@element-plus/icons-vue";
+import { Download, VideoPlay, Setting, Close, Refresh, List } from "@element-plus/icons-vue";
+import DownloadView from "./views/Download.vue";
+import SettingsView from "./views/Settings.vue";
+import MacWindow from "./components/MacWindow.vue";
 
-const route = useRoute();
-const router = useRouter();
+// ---------- macOS 风格浮动窗口管理 ----------
+interface WinState {
+  x: number; y: number; w: number; h: number;
+  z: number; open: boolean; min: boolean; max: boolean;
+}
+const wins = reactive<Record<string, WinState>>({
+  download: { x: 70, y: 36, w: 780, h: 580, z: 1, open: false, min: false, max: false },
+  tasks: { x: 880, y: 70, w: 350, h: 430, z: 2, open: false, min: false, max: false },
+  settings: { x: 150, y: 70, w: 660, h: 620, z: 3, open: false, min: false, max: false },
+});
+let zTop = 10;
+
+// Dock 随应用窗口大小缩放（0.65 ~ 1）
+const dockZoom = ref(1);
+function updateDockZoom() {
+  dockZoom.value = Math.min(1, Math.max(0.65, window.innerWidth / 1500));
+}
+
+// 自定义右键菜单（替代 WebView2 原生菜单，统一玻璃风）
+const ctx = reactive({ show: false, x: 0, y: 0 });
+function onContextMenu(e: MouseEvent) {
+  e.preventDefault();
+  ctx.show = true;
+  ctx.x = Math.min(e.clientX, window.innerWidth - 170);
+  ctx.y = Math.min(e.clientY, window.innerHeight - 190);
+}
+function closeCtx() { ctx.show = false; }
+function reloadApp() { location.reload(); }
+function focusWin(k: string) { wins[k].z = ++zTop; }
+// Dock 点击：未开则打开，已最小化则还原，否则置顶
+function dockClick(k: string) {
+  const w = wins[k];
+  if (!w.open) { w.open = true; w.min = false; }
+  else if (w.min) { w.min = false; }
+  focusWin(k);
+}
+
 const ok = ref(false);
 const checking = ref(false);
 
@@ -113,7 +149,10 @@ async function recheckAria2() {
     ElMessage.success("aria2c 检测通过 ✿");
   } catch {
     ok.value = false;
-    ElMessage.warning("找不到 aria2c，请到「设置」页指定路径");
+    ElMessage.warning("找不到 aria2c，请打开「设置」窗口指定路径");
+    wins.settings.open = true;
+    wins.settings.min = false;
+    focusWin("settings");
   } finally {
     checking.value = false;
   }
@@ -131,6 +170,11 @@ const bgStyle = computed(() =>
       }
     : {}
 );
+// 填充层：同图 cover + 模糊，透明度略低于主层，作为自然底色
+const bgFillStyle = computed(() => ({
+  backgroundImage: `url("${convertFileSrc(bgImage.value)}")`,
+  opacity: Math.min(1, bgOpacity.value * 1.2),
+}));
 
 function applyBg(s: { bg_image?: string; bg_opacity?: number; ui_opacity?: number }) {
   bgImage.value = s.bg_image ?? "";
@@ -186,14 +230,6 @@ interface Task {
 }
 
 const tasks = reactive<Task[]>([]);
-const showTaskPanel = ref(false);
-const collapseActive = ref<string[]>([]);
-
-// 折叠面板随开关同步
-watch(() => showTaskPanel.value, (v) => {
-  collapseActive.value = v ? ["tasks"] : [];
-}, { immediate: true });
-
 const activeTaskCount = computed(() => tasks.filter((t) => t.status === "running").length);
 
 function formatSize(kbps: number) {
@@ -229,6 +265,10 @@ async function stopTask(id: string) {
 // ---------- 事件监听 ----------
 
 onMounted(async () => {
+  // 0) Dock 缩放
+  updateDockZoom();
+  window.addEventListener("resize", updateDockZoom);
+
   // 0) 应用已保存的背景设置，并监听设置页保存后的即时生效
   try {
     applyBg(await invoke("load_settings"));
@@ -241,8 +281,10 @@ onMounted(async () => {
     ok.value = true;
     console.log("aria2c path:", path);
   } catch {
-    ElMessage.warning("找不到 aria2c 呢…请到「设置」页指定路径哦 (＞﹏＜)");
-    router.push("/settings");
+    ElMessage.warning("找不到 aria2c 呢…请打开「设置」窗口指定路径哦 (＞﹏＜)");
+    wins.settings.open = true;
+    wins.settings.min = false;
+    focusWin("settings");
   }
 
   // 2) 监听：新任务开始
@@ -446,8 +488,90 @@ body {
   border-color: rgba(255, 255, 255, .5) !important;
 }
 
-/* ============ 布局 ============ */
-.layout { display: flex; height: 100vh; position: relative; }
+/* ============ 桌面布局（macOS 风格） ============ */
+.layout { height: 100vh; position: relative; overflow: hidden; }
+
+/* Dock：底部居中玻璃条（尺寸随窗口缩放任 zoom 控制） */
+.dock {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 5000;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-radius: 18px;
+  background: var(--glass-panel);
+  backdrop-filter: blur(18px) saturate(1.6) brightness(1.1);
+  border: 1px solid rgba(255, 255, 255, .25);
+  box-shadow: 0 12px 40px rgba(60, 30, 90, .3);
+}
+.dock-item {
+  position: relative;
+  width: 42px; height: 42px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255, 255, 255, .14);
+  border: 1px solid rgba(255, 255, 255, .18);
+  color: #fff; cursor: pointer;
+  transition: transform .18s ease, background .18s ease;
+}
+.dock-item:hover { transform: translateY(-6px) scale(1.12); background: rgba(255, 255, 255, .26); }
+.dock-item:active { transform: translateY(-2px) scale(1.02); }
+.dock-dot {
+  position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
+  width: 5px; height: 5px; border-radius: 50%;
+  background: rgba(255, 255, 255, .9);
+  box-shadow: 0 0 4px rgba(0, 0, 0, .3);
+}
+.dock-sep { width: 1px; height: 34px; background: rgba(255, 255, 255, .22); }
+.dock-status {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 12px; border-radius: 14px; font-size: 12px;
+  background: rgba(255, 255, 255, .1);
+  border: 1px solid rgba(255, 255, 255, .15);
+  cursor: pointer; transition: background .15s ease;
+}
+.dock-status:hover { background: rgba(255, 255, 255, .2); }
+.dock-status:active { transform: scale(.97); }
+
+/* 自定义右键菜单：浅玻璃 + 深字 */
+.ctx-menu {
+  position: fixed; z-index: 9999;
+  min-width: 150px; padding: 6px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, .38);
+  backdrop-filter: blur(16px) saturate(1.5);
+  border: 1px solid rgba(255, 255, 255, .45);
+  box-shadow: 0 10px 32px rgba(60, 30, 90, .32);
+  animation: ctxIn .12s ease;
+}
+@keyframes ctxIn {
+  from { opacity: 0; transform: scale(.94); }
+  to { opacity: 1; transform: none; }
+}
+.ctx-item {
+  padding: 7px 14px; border-radius: 8px;
+  font-size: 13px; color: #4a3a5c; text-shadow: none;
+  cursor: pointer; transition: background .12s ease;
+}
+.ctx-item:hover { background: rgba(255, 255, 255, .5); }
+.ctx-sep { height: 1px; margin: 5px 8px; background: rgba(255, 255, 255, .5); }
+
+/* 任务窗口内部 */
+.task-win { display: flex; flex-direction: column; gap: 8px; }
+.task-win-head {
+  display: flex; justify-content: space-between;
+  font-size: 12px; color: rgba(255, 255, 255, .85); padding: 0 2px;
+}
+.task-win-empty {
+  padding: 26px 0; text-align: center; font-size: 13px;
+  color: rgba(255, 255, 255, .8);
+}
+
+/* 背景填充层：cover 铺满 + 强模糊，抹平 contain 的留白边缘，
+   任何比例的图都能无缝融合（放大 1.15 避免模糊边缘透明） */
+.bg-fill {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-size: cover; background-position: center;
+  filter: blur(42px) saturate(1.25) brightness(1.02);
+  transform: scale(1.15);
+}
 
 /* 背景图片层：垫在最底下，樱花和界面都在其上 */
 /* contain 完整展示图片不裁切，留白处透出底层渐变 */
@@ -571,27 +695,19 @@ body {
 .status-card:hover .recheck-icon { opacity: 1; }
 .recheck-icon.spin { animation: recheck-spin 1s linear infinite; opacity: 1; }
 @keyframes recheck-spin { to { transform: rotate(360deg); } }
-.status-card.ok { color: #7ce8bd; }
-.status-card.warn { color: #ffc069; }
+.status-card.ok, .dock-status.ok { color: #7ce8bd; }
+.status-card.warn, .dock-status.warn { color: #ffc069; }
 .status-dot {
   width: 8px; height: 8px; border-radius: 50%;
   box-shadow: 0 0 6px currentColor;
   animation: pulse 2s ease-in-out infinite;
 }
-.status-card.ok .status-dot { background: #4ecfa3; }
-.status-card.warn .status-dot { background: #f5a623; }
+.status-card.ok .status-dot, .dock-status.ok .status-dot { background: #4ecfa3; }
+.status-card.warn .status-dot, .dock-status.warn .status-dot { background: #f5a623; }
+.dock-status:hover .recheck-icon { opacity: 1; }
 @keyframes pulse { 50% { opacity: .4; transform: scale(.85); } }
 
-/* 内容区：居中列布局，两侧对称露出壁纸 */
-.content {
-  flex: 1; z-index: 1; position: relative;
-  padding: 24px 30px; overflow-y: auto;
-}
-.content > * {
-  max-width: 860px;
-  margin-left: auto;
-  margin-right: auto;
-}
+/* 状态点 / 检测图标沿用旧样式（dock-status 复用） */
 
 /* 毛玻璃卡片 */
 .panel {

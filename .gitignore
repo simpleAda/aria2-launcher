@@ -17,3 +17,6 @@ Desktop.ini
 
 # 编辑器
 .idea/
+
+# Trae 工具产物
+.trae-html-share-packages/

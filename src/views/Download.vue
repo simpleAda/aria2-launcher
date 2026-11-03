@@ -43,7 +43,6 @@
 import { ref, reactive, onMounted, onUnmounted, nextTick, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { VideoPlay, Delete } from "@element-plus/icons-vue";
 // 按需引入，冷启动不加载整个 echarts
@@ -57,13 +56,12 @@ const links = ref("");
 const logEl = ref<HTMLElement | null>(null);
 const chartEl = ref<HTMLElement | null>(null);
 
-const router = useRouter();
-
 const logText = ref("");
 let unlistenLog: UnlistenFn | null = null;
 let unlistenStats: UnlistenFn | null = null;
 let unlistenStarted: UnlistenFn | null = null;
 let chart: ReturnType<typeof echarts.init> | null = null;
+let chartObserver: ResizeObserver | null = null;
 
 // 当前关注的任务 id（用于日志过滤）
 const currentTaskId = ref<string | null>(null);
@@ -264,8 +262,12 @@ onMounted(async () => {
   // 1) 初始化图表（必须在 DOM 挂载后）
   initChart();
 
-  // 窗口缩放时重绘图表
+  // 窗口（含 macOS 浮动窗口）缩放时重绘图表
   window.addEventListener("resize", resizeChart);
+  if (chartEl.value) {
+    chartObserver = new ResizeObserver(resizeChart);
+    chartObserver.observe(chartEl.value);
+  }
 
   // 2) 新任务开始：记录当前任务 id（供图表/日志过滤）
   unlistenStarted = await listen<string>("download-started", (ev) => {
@@ -306,16 +308,11 @@ onMounted(async () => {
     const payload = JSON.parse(ev.payload);
     pushLog(payload.id, payload.text);
   });
-
-  try {
-    await invoke("find_aria2");
-  } catch {
-    router.push("/settings");
-  }
 });
 
 onUnmounted(() => {
   window.removeEventListener("resize", resizeChart);
+  chartObserver?.disconnect();
   unlistenStarted?.();
   unlistenStats?.();
   unlistenLog?.();
