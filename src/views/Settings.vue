@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="panel" style="max-width: 560px">
+    <div class="panel">
       <div class="panel-title">aria2c 程序 ✿</div>
 
       <el-form label-position="top" size="large">
@@ -19,7 +19,7 @@
       </el-form>
     </div>
 
-    <div class="panel" style="max-width: 560px">
+    <div class="panel">
       <div class="panel-title">下载参数 ✿</div>
 
       <el-form label-position="top" size="large">
@@ -56,7 +56,7 @@
     </div>
 
     <!-- 界面背景 -->
-    <div class="panel" style="max-width: 560px">
+    <div class="panel">
       <div class="panel-title">界面背景 ✿</div>
       <el-form label-position="top" size="large">
         <el-form-item label="背景图片">
@@ -77,12 +77,18 @@
         <el-form-item label="页面整体不透明度（越低背景越透）">
           <el-slider v-model="s.ui_opacity" :min="0.2" :max="1" :step="0.05" :format-tooltip="fmtPct" />
         </el-form-item>
+        <el-form-item label="关闭主窗口时">
+          <el-select v-model="s.close_to_tray" style="width: 100%">
+            <el-option :value="true" label="最小化到托盘（后台继续下载）" />
+            <el-option :value="false" label="直接退出程序" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <div class="hint hint-plain">保存后立即生效</div>
     </div>
 
     <!-- 保存：作用于以上所有设置 -->
-    <div class="row" style="max-width: 560px; margin-top: 4px">
+    <div class="row" style="margin-top: 4px">
       <el-button type="primary" round class="pink-btn" :icon="Check" @click="save">保存设置</el-button>
       <el-button round :icon="RefreshLeft" @click="resetDefaults">恢复默认</el-button>
     </div>
@@ -107,6 +113,7 @@ interface Settings {
   bg_image: string;
   bg_opacity: number;
   ui_opacity: number;
+  close_to_tray: boolean;
 }
 
 const s = reactive<Settings>({
@@ -120,6 +127,7 @@ const s = reactive<Settings>({
   bg_image: "",
   bg_opacity: 0.5,
   ui_opacity: 1,
+  close_to_tray: true,
 });
 
 const fmtPct = (v: number) => Math.round(v * 100) + "%";

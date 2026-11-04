@@ -23,6 +23,7 @@ struct Settings {
     bg_image: String,
     bg_opacity: f64,
     ui_opacity: f64,
+    close_to_tray: bool,
 }
 
 impl Default for Settings {
@@ -38,6 +39,7 @@ impl Default for Settings {
             bg_image: String::new(),
             bg_opacity: 0.5,
             ui_opacity: 1.0,
+            close_to_tray: true,
         }
     }
 }
@@ -185,6 +187,8 @@ fn parse_progress_line(line: &str) -> Option<ProgressStats> {
 
 struct DownloadEntry {
     child: Mutex<Option<Child>>,
+    dir: String,
+    urls: Vec<String>,
 }
 
 struct DownloadState {
@@ -234,6 +238,8 @@ fn spawn_aria2(app: &AppHandle, id: &str, urls: &[String]) -> Result<String, Str
     // 存入任务表
     let entry = DownloadEntry {
         child: Mutex::new(Some(child)),
+        dir: dir.clone(),
+        urls: urls.to_vec(),
     };
     app.state::<DownloadState>()
         .tasks
@@ -391,6 +397,7 @@ fn stop_download(
     id: String,
 ) -> Result<(), String> {
     let mut tasks = state.tasks.lock().map_err(|e| e.to_string())?;
+    let mut cleanup: Option<(String, Vec<String>)> = None;
     if let Some(entry) = tasks.get_mut(&id) {
         let mut g = entry.child.lock().map_err(|e| e.to_string())?;
         if let Some(child) = g.as_mut() {
@@ -402,14 +409,69 @@ fn stop_download(
                 .status();
             *g = None;
         }
+        cleanup = Some((entry.dir.clone(), entry.urls.clone()));
     }
     let removed = tasks.remove(&id).is_some();
     drop(tasks);
+
+    // 清掉本次任务的中间文件：未完成的分片文件 + .aria2 控制文件
+    // 等 400ms 让被杀掉的 aria2c 释放文件句柄
+    if let Some((dir, urls)) = cleanup {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let mut cleaned = 0u32;
+        for u in &urls {
+            if let Some(name) = guess_filename(u) {
+                for cand in [
+                    std::path::Path::new(&dir).join(&name),
+                    std::path::Path::new(&dir).join(format!("{name}.aria2")),
+                ] {
+                    if cand.exists() && std::fs::remove_file(&cand).is_ok() {
+                        cleaned += 1;
+                    }
+                }
+            }
+        }
+        if cleaned > 0 {
+            emit_log(&app, &id, &format!("已清理 {cleaned} 个残留文件"));
+        }
+    }
+
     if removed {
         let payload = serde_json::json!({ "id": id, "stopped": true }).to_string();
         emit_event(&app, "download-exit", &payload);
     }
     Ok(())
+}
+
+/// 从 URL 推测 aria2 落盘的文件名（仅 http/https 可确定，磁链返回 None）。
+/// 规则：去掉 query/fragment 后取最后一段，做百分号解码。
+fn guess_filename(url: &str) -> Option<String> {
+    let no_frag = url.split('#').next()?;
+    let no_query = no_frag.split('?').next()?;
+    let seg = no_query.rsplit('/').next()?.trim();
+    if seg.is_empty() || !url.starts_with("http") {
+        return None;
+    }
+    percent_decode(seg)
+}
+
+/// 最小百分号解码（%XX → UTF-8），失败回退原串
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h = (bytes[i + 1] as char).to_digit(16)?;
+            let l = (bytes[i + 2] as char).to_digit(16)?;
+            out.push((h * 16 + l) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    Some(String::from_utf8_lossy(&out).into_owned())
 }
 
 #[tauri::command]
@@ -434,6 +496,42 @@ fn main() {
             stop_download,
             list_downloads
         ])
+        // ---------- 系统托盘 ----------
+        .setup(|app| {
+            use tauri::menu::{Menu, MenuItem};
+            use tauri::tray::TrayIconBuilder;
+
+            let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("aria2 启动器")
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.unminimize();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
+            Ok(())
+        })
+        // 点窗口关闭按钮：按设置决定「最小化到托盘」或「直接退出」
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if load_settings(window.app_handle().clone()).close_to_tray {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

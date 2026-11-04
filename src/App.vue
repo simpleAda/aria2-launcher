@@ -68,15 +68,15 @@
     <div class="dock" :style="{ zoom: dockZoom }">
       <div class="dock-item" title="下载" @click="dockClick('download')">
         <el-icon :size="26"><VideoPlay /></el-icon>
-        <i v-if="wins.download.open" class="dock-dot"></i>
+        <i v-if="wins.download.open" class="dock-dot" :class="{ dim: wins.download.min }"></i>
       </div>
       <div class="dock-item" title="下载任务" @click="dockClick('tasks')">
         <el-icon :size="26"><List /></el-icon>
-        <i v-if="wins.tasks.open" class="dock-dot"></i>
+        <i v-if="wins.tasks.open" class="dock-dot" :class="{ dim: wins.tasks.min }"></i>
       </div>
       <div class="dock-item" title="设置" @click="dockClick('settings')">
         <el-icon :size="26"><Setting /></el-icon>
-        <i v-if="wins.settings.open" class="dock-dot"></i>
+        <i v-if="wins.settings.open" class="dock-dot" :class="{ dim: wins.settings.min }"></i>
       </div>
       <div class="dock-sep"></div>
       <div class="dock-status" :class="[ok ? 'ok' : 'warn', { checking }]"
@@ -128,11 +128,21 @@ function onContextMenu(e: MouseEvent) {
 function closeCtx() { ctx.show = false; }
 function reloadApp() { location.reload(); }
 function focusWin(k: string) { wins[k].z = ++zTop; }
+// 打开前把窗口钳制在可视区内：尺寸不超限，位置不出屏（适配小窗口形态）
+function fitWin(w: WinState) {
+  const maxW = window.innerWidth - 24;
+  const maxH = window.innerHeight - 104;      // 预留 Dock 高度
+  w.w = Math.min(w.w, maxW);
+  w.h = Math.min(w.h, maxH);
+  w.x = Math.min(Math.max(w.x, 8), Math.max(8, window.innerWidth - w.w - 8));
+  w.y = Math.min(Math.max(w.y, 8), Math.max(8, window.innerHeight - w.h - 96));
+}
 // Dock 点击：未开则打开，已最小化则还原，否则置顶
 function dockClick(k: string) {
   const w = wins[k];
   if (!w.open) { w.open = true; w.min = false; }
   else if (w.min) { w.min = false; }
+  fitWin(w);
   focusWin(k);
 }
 
@@ -152,6 +162,7 @@ async function recheckAria2() {
     ElMessage.warning("找不到 aria2c，请打开「设置」窗口指定路径");
     wins.settings.open = true;
     wins.settings.min = false;
+    fitWin(wins.settings);
     focusWin("settings");
   } finally {
     checking.value = false;
@@ -284,6 +295,7 @@ onMounted(async () => {
     ElMessage.warning("找不到 aria2c 呢…请打开「设置」窗口指定路径哦 (＞﹏＜)");
     wins.settings.open = true;
     wins.settings.min = false;
+    fitWin(wins.settings);
     focusWin("settings");
   }
 
@@ -519,6 +531,7 @@ body {
   background: rgba(255, 255, 255, .9);
   box-shadow: 0 0 4px rgba(0, 0, 0, .3);
 }
+.dock-dot.dim { opacity: .3; }  /* 最小化在 Dock 里的窗口：暗点提示 */
 .dock-sep { width: 1px; height: 34px; background: rgba(255, 255, 255, .22); }
 .dock-status {
   display: flex; align-items: center; gap: 7px;
