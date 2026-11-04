@@ -24,6 +24,11 @@ struct Settings {
     bg_opacity: f64,
     ui_opacity: f64,
     close_to_tray: bool,
+    /// 旧字段：仅从老配置迁移，不再写回（迁移到 plugins["mascot"]）
+    #[serde(skip_serializing)]
+    show_drop_ball: bool,
+    /// 插件开关：插件 id → 是否启用
+    plugins: HashMap<String, bool>,
 }
 
 impl Default for Settings {
@@ -40,6 +45,8 @@ impl Default for Settings {
             bg_opacity: 0.5,
             ui_opacity: 1.0,
             close_to_tray: true,
+            show_drop_ball: false,
+            plugins: HashMap::new(),
         }
     }
 }
@@ -53,10 +60,15 @@ fn settings_file(app: &AppHandle) -> PathBuf {
 #[tauri::command]
 fn load_settings(app: AppHandle) -> Settings {
     let path = settings_file(&app);
-    std::fs::read_to_string(&path)
+    let mut s: Settings = std::fs::read_to_string(&path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // 旧配置迁移：show_drop_ball → plugins["mascot"]
+    if s.show_drop_ball {
+        s.plugins.entry("mascot".into()).or_insert(true);
+    }
+    s
 }
 
 #[tauri::command]
@@ -72,6 +84,116 @@ fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
 #[tauri::command]
 fn default_settings() -> Settings {
     Settings::default()
+}
+
+// ---------- 插件系统 ----------
+
+/// 第三方插件清单：plugins/<id>/plugin.json
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct PluginManifest {
+    id: String,
+    name: String,
+    version: String,
+    author: String,
+    description: String,
+    icon: String,  // emoji
+    entry: String, // 相对插件目录的入口 html，默认 index.html
+}
+
+impl Default for PluginManifest {
+    fn default() -> Self {
+        PluginManifest {
+            id: String::new(),
+            name: "未命名插件".into(),
+            version: "1.0.0".into(),
+            author: String::new(),
+            description: String::new(),
+            icon: "🧩".into(),
+            entry: "index.html".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PluginInfo {
+    id: String,
+    name: String,
+    version: String,
+    author: String,
+    description: String,
+    icon: String,
+    builtin: bool,
+    enabled: bool,
+    entry_path: String, // 第三方插件入口绝对路径；内置插件为空
+}
+
+fn plugins_dir(app: &AppHandle) -> PathBuf {
+    let dir = app.path().app_data_dir().expect("no app data dir").join("plugins");
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
+fn mascot_enabled(s: &Settings) -> bool {
+    s.plugins.get("mascot").copied().unwrap_or(false)
+}
+
+#[tauri::command]
+fn list_plugins(app: AppHandle) -> Vec<PluginInfo> {
+    let s = load_settings(app.clone());
+    let mut list = vec![PluginInfo {
+        id: "mascot".into(),
+        name: "看板娘 · 速降球".into(),
+        version: "1.0.0".into(),
+        author: "内置".into(),
+        description: "桌面 Live2D 看板娘，拖链接到她身上直接开始下载".into(),
+        icon: "🌸".into(),
+        builtin: true,
+        enabled: mascot_enabled(&s),
+        entry_path: String::new(),
+    }];
+    // 扫描开放插件目录：plugins/<id>/plugin.json
+    if let Ok(rd) = std::fs::read_dir(plugins_dir(&app)) {
+        for e in rd.flatten() {
+            let manifest_path = e.path().join("plugin.json");
+            let Ok(text) = std::fs::read_to_string(&manifest_path) else { continue };
+            let Ok(m) = serde_json::from_str::<PluginManifest>(&text) else { continue };
+            if m.id.is_empty() || m.id == "mascot" { continue; }
+            let entry = e.path().join(&m.entry);
+            if !entry.is_file() { continue; }
+            let enabled = s.plugins.get(&m.id).copied().unwrap_or(false);
+            list.push(PluginInfo {
+                id: m.id,
+                name: m.name,
+                version: m.version,
+                author: m.author,
+                description: m.description,
+                icon: m.icon,
+                builtin: false,
+                enabled,
+                entry_path: entry.to_string_lossy().into_owned(),
+            });
+        }
+    }
+    list
+}
+
+#[tauri::command]
+fn set_plugin_enabled(app: AppHandle, id: String, enabled: bool) -> Result<(), String> {
+    let mut s = load_settings(app.clone());
+    s.plugins.insert(id, enabled);
+    // save_settings 内部会 emit settings-changed，统一同步球窗显隐与托盘勾选
+    save_settings(app, s)
+}
+
+#[tauri::command]
+fn open_plugins_dir(app: AppHandle) -> Result<(), String> {
+    let dir = plugins_dir(&app);
+    Command::new("explorer")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("打开目录失败：{e}"))?;
+    Ok(())
 }
 
 // ---------- aria2c 查找 ----------
@@ -189,6 +311,7 @@ struct DownloadEntry {
     child: Mutex<Option<Child>>,
     dir: String,
     urls: Vec<String>,
+    rpc_port: u16,
 }
 
 struct DownloadState {
@@ -201,6 +324,7 @@ struct DownloadState {
 fn spawn_aria2(app: &AppHandle, id: &str, urls: &[String]) -> Result<String, String> {
     let aria2 = find_aria2(app.clone())?;
     let s = load_settings(app.clone());
+    let port = pick_rpc_port(id);
 
     let dir = if s.dir.trim().is_empty() {
         dirs::download_dir()
@@ -219,7 +343,11 @@ fn spawn_aria2(app: &AppHandle, id: &str, urls: &[String]) -> Result<String, Str
         .arg(format!("--dir={}", dir))
         .arg("--summary-interval=1")
         .arg("--console-log-level=warn")
-        .arg("--file-allocation=none");
+        .arg("--file-allocation=none")
+        // 开启 RPC 供任务卡片实时调速（每个任务独立端口，密钥固定；自动避让被占端口）
+        .arg("--enable-rpc")
+        .arg(format!("--rpc-listen-port={}", port))
+        .arg("--rpc-secret=sakura");
     if !s.extra_args.trim().is_empty() {
         let args: Vec<&str> = s.extra_args.split_whitespace().collect();
         cmd.args(args);
@@ -240,6 +368,7 @@ fn spawn_aria2(app: &AppHandle, id: &str, urls: &[String]) -> Result<String, Str
         child: Mutex::new(Some(child)),
         dir: dir.clone(),
         urls: urls.to_vec(),
+        rpc_port: port,
     };
     app.state::<DownloadState>()
         .tasks
@@ -317,7 +446,7 @@ fn spawn_aria2(app: &AppHandle, id: &str, urls: &[String]) -> Result<String, Str
             // 第一阶段：只读判定（entry 借用 tasks，期间不能 remove）
             enum Outcome {
                 Running,
-                Finished(String),
+                Finished(std::process::ExitStatus),
                 Failed(String),
                 Gone,
             }
@@ -332,7 +461,7 @@ fn spawn_aria2(app: &AppHandle, id: &str, urls: &[String]) -> Result<String, Str
                 };
                 match child_guard.as_mut() {
                     Some(c) => match c.try_wait() {
-                        Ok(Some(status)) => Outcome::Finished(format!("{status}")),
+                        Ok(Some(status)) => Outcome::Finished(status),
                         Ok(None) => Outcome::Running,
                         Err(e) => Outcome::Failed(e.to_string()),
                     },
@@ -343,9 +472,20 @@ fn spawn_aria2(app: &AppHandle, id: &str, urls: &[String]) -> Result<String, Str
             match outcome {
                 Outcome::Running => {}
                 Outcome::Finished(status) => {
-                    let payload = serde_json::json!({ "id": id_w, "status": status }).to_string();
+                    let payload = serde_json::json!({ "id": id_w, "status": format!("{status}") }).to_string();
                     emit_event(&app_w, "download-exit", &payload);
-                    tasks.remove(&id_w);
+                    if let Some(entry) = tasks.remove(&id_w) {
+                        push_history(
+                            &app_w,
+                            HistoryEntry {
+                                id: id_w.clone(),
+                                urls: entry.urls,
+                                dir: entry.dir,
+                                status: if status.success() { "done".into() } else { "error".into() },
+                                finished_at: now_millis(),
+                            },
+                        );
+                    }
                     break;
                 }
                 Outcome::Failed(e) => {
@@ -416,10 +556,10 @@ fn stop_download(
 
     // 清掉本次任务的中间文件：未完成的分片文件 + .aria2 控制文件
     // 等 400ms 让被杀掉的 aria2c 释放文件句柄
-    if let Some((dir, urls)) = cleanup {
+    if let Some((dir, urls)) = &cleanup {
         std::thread::sleep(std::time::Duration::from_millis(400));
         let mut cleaned = 0u32;
-        for u in &urls {
+        for u in urls {
             if let Some(name) = guess_filename(u) {
                 for cand in [
                     std::path::Path::new(&dir).join(&name),
@@ -437,6 +577,19 @@ fn stop_download(
     }
 
     if removed {
+        // 记录到下载历史（已停止）
+        if let Some((dir, urls)) = &cleanup {
+            push_history(
+                &app,
+                HistoryEntry {
+                    id: id.clone(),
+                    urls: urls.clone(),
+                    dir: dir.clone(),
+                    status: "stopped".into(),
+                    finished_at: now_millis(),
+                },
+            );
+        }
         let payload = serde_json::json!({ "id": id, "stopped": true }).to_string();
         emit_event(&app, "download-exit", &payload);
     }
@@ -480,6 +633,148 @@ fn list_downloads(state: State<'_, DownloadState>) -> Result<Vec<String>, String
     Ok(tasks.keys().cloned().collect())
 }
 
+// ---------- 下载历史 ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct HistoryEntry {
+    id: String,
+    urls: Vec<String>,
+    dir: String,
+    status: String, // done | stopped | error
+    finished_at: i64,
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn history_file(app: &AppHandle) -> PathBuf {
+    let dir = app.path().app_data_dir().expect("no app data dir");
+    std::fs::create_dir_all(&dir).ok();
+    dir.join("history.json")
+}
+
+fn load_history(app: &AppHandle) -> Vec<HistoryEntry> {
+    std::fs::read_to_string(history_file(app))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn push_history(app: &AppHandle, entry: HistoryEntry) {
+    let mut list = load_history(app);
+    list.insert(0, entry); // 新的在最前
+    list.truncate(100);
+    if let Ok(text) = serde_json::to_string_pretty(&list) {
+        let _ = std::fs::write(history_file(app), text);
+    }
+}
+
+#[tauri::command]
+fn list_history(app: AppHandle) -> Vec<HistoryEntry> {
+    load_history(&app)
+}
+
+#[tauri::command]
+fn reveal_in_folder(dir: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer").arg(&dir).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(&dir).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open").arg(&dir).spawn().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+// ---------- 任务限速（aria2 RPC）----------
+
+/// 每个任务的 aria2c 用独立 RPC 端口：16800 + 任务序号为基准，
+/// 若被占用（比如上次运行残留的 aria2c 进程）则向上探测空闲端口
+fn pick_rpc_port(id: &str) -> u16 {
+    let base = 16800 + id.trim_start_matches("task_").parse::<u16>().unwrap_or(0);
+    (base..base.saturating_add(100))
+        .find(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok())
+        .unwrap_or(base)
+}
+
+/// 最小 JSON-RPC over HTTP 客户端（localhost、明文、Connection: close）
+fn rpc_call(port: u16, method: &str, params: serde_json::Value) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let body = serde_json::json!({
+        "jsonrpc": "2.0", "id": "sakura", "method": method, "params": params
+    })
+    .to_string();
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2))
+        .map_err(|e| format!("连接 aria2 RPC 失败（任务可能刚启动）：{e}"))?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(2))).ok();
+    let req = format!(
+        "POST /jsonrpc HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
+    stream.flush().ok();
+    let mut resp = String::new();
+    let _ = stream.read_to_string(&mut resp); // 读超时/对端不关连接都不致命
+    if resp.contains("\"error\"") {
+        return Err("aria2 拒绝了限速设置".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_speed_limit(
+    app: AppHandle,
+    state: State<'_, DownloadState>,
+    id: String,
+    bytes: u64,
+) -> Result<(), String> {
+    let port = {
+        let tasks = state.tasks.lock().map_err(|e| e.to_string())?;
+        tasks.get(&id).map(|e| e.rpc_port).ok_or("任务不存在或已结束")?
+    };
+    // 阻塞式 TCP 挪到后台线程：之前同步 read 会卡住整个窗口，看起来像“下载停了”
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // 每个任务一个 aria2c 进程：改全局限速 = 改该任务的限速，立即生效
+        rpc_call(
+            port,
+            "aria2.changeGlobalOption",
+            serde_json::json!(["token:sakura", { "max-download-limit": bytes.to_string() }]),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    match &result {
+        Ok(()) => emit_log(&app, &id, &format!("[限速] 已设置为 {}", fmt_limit(bytes))),
+        Err(e) => emit_log(&app, &id, &format!("[限速] 设置失败：{e}")),
+    }
+    result
+}
+
+/// 限速值的人类可读格式（0 = 不限速，aria2 协议定义）
+fn fmt_limit(bytes: u64) -> String {
+    if bytes == 0 {
+        "不限速".to_string()
+    } else if bytes % 1_048_576 == 0 {
+        format!("{} MB/s", bytes / 1_048_576)
+    } else if bytes % 1024 == 0 {
+        format!("{} KB/s", bytes / 1024)
+    } else {
+        format!("{bytes} B/s")
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -494,16 +789,25 @@ fn main() {
             find_aria2,
             start_download,
             stop_download,
-            list_downloads
+            list_downloads,
+            list_history,
+            reveal_in_folder,
+            set_speed_limit,
+            list_plugins,
+            set_plugin_enabled,
+            open_plugins_dir
         ])
         // ---------- 系统托盘 ----------
         .setup(|app| {
-            use tauri::menu::{Menu, MenuItem};
+            use tauri::menu::{CheckMenuItem, Menu, MenuItem};
             use tauri::tray::TrayIconBuilder;
+            use tauri::Listener;
 
             let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let ball_on = mascot_enabled(&load_settings(app.handle().clone()));
+            let ball = CheckMenuItem::with_id(app, "ball", "显示速降球", true, ball_on, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &ball, &quit])?;
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -517,18 +821,62 @@ fn main() {
                             let _ = w.set_focus();
                         }
                     }
+                    "ball" => {
+                        // 勾选状态由系统自动切换；写回设置并走 settings-changed 统一同步窗口显隐
+                        let mut s = load_settings(app.clone());
+                        let on = !mascot_enabled(&s);
+                        s.plugins.insert("mascot".into(), on);
+                        let _ = save_settings(app.clone(), s);
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
                 .build(app)?;
+
+            // 启动时按设置恢复速降球
+            if ball_on {
+                if let Some(w) = app.get_webview_window("dropball") { let _ = w.show(); }
+            }
+
+            // 设置保存后：同步球窗显隐 + 托盘勾选
+            let ball_sync = ball.clone();
+            let app_sync = app.handle().clone();
+            app.listen("settings-changed", move |ev| {
+                // 注意：emit 的载荷是 String，Rust 侧拿到的是再序列化一层的 JSON，需要先解出内层字符串
+                let json = serde_json::from_str::<String>(ev.payload()).unwrap_or_else(|_| ev.payload().to_string());
+                if let Ok(s) = serde_json::from_str::<Settings>(&json) {
+                    let on = mascot_enabled(&s);
+                    if let Some(w) = app_sync.get_webview_window("dropball") {
+                        let vis = w.is_visible().unwrap_or(false);
+                        if on != vis {
+                            if on { let _ = w.show(); } else { let _ = w.hide(); }
+                        }
+                    }
+                    let _ = ball_sync.set_checked(on);
+                }
+            });
+
+            // 球上点「隐藏」：持久化关闭 + 取消托盘勾选
+            let ball_hide = ball.clone();
+            let app_hide = app.handle().clone();
+            app.listen("dropball-hide", move |_| {
+                let mut s = load_settings(app_hide.clone());
+                s.plugins.insert("mascot".into(), false);
+                let _ = save_settings(app_hide.clone(), s);
+                let _ = ball_hide.set_checked(false);
+            });
             Ok(())
         })
         // 点窗口关闭按钮：按设置决定「最小化到托盘」或「直接退出」
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" { return; }
                 if load_settings(window.app_handle().clone()).close_to_tray {
                     let _ = window.hide();
                     api.prevent_close();
+                } else if let Some(ball) = window.get_webview_window("dropball") {
+                    // 直接退出时把速降球一起关掉，否则进程不会结束
+                    let _ = ball.close();
                 }
             }
         })

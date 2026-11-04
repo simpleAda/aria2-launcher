@@ -12,53 +12,90 @@
     </div>
 
     <!-- 下载窗口 -->
-    <MacWindow v-if="wins.download.open && !wins.download.min" :win="wins.download" title="下载"
-      @close="wins.download.open = false" @minimize="wins.download.min = true" @focus="focusWin('download')">
-      <DownloadView />
-    </MacWindow>
+    <Transition name="mac">
+      <MacWindow v-if="wins.download.open && !wins.download.min" :win="wins.download" title="下载"
+        @close="wins.download.open = false" @minimize="wins.download.min = true" @focus="focusWin('download')">
+        <DownloadView />
+      </MacWindow>
+    </Transition>
 
-    <!-- 任务窗口 -->
-    <MacWindow v-if="wins.tasks.open && !wins.tasks.min" :win="wins.tasks" title="下载任务"
-      @close="wins.tasks.open = false" @minimize="wins.tasks.min = true" @focus="focusWin('tasks')">
+    <!-- 任务窗口（进行中 / 历史 二合一） -->
+    <Transition name="mac">
+      <MacWindow v-if="wins.tasks.open && !wins.tasks.min" :win="wins.tasks" title="下载任务"
+        @close="wins.tasks.open = false" @minimize="wins.tasks.min = true" @focus="focusWin('tasks')">
       <div class="task-win">
         <div class="task-win-head">
-          <span>进行中 {{ activeTaskCount }}</span>
-          <span>共 {{ tasks.length }}</span>
-        </div>
-        <div v-if="!tasks.length" class="task-win-empty">还没有任务，去「下载」窗口添加吧 🌸</div>
-        <div v-for="t in tasks" :key="t.id" class="sidebar-task-item"
-             :class="{ 'sidebar-task-running': t.status === 'running' }">
-          <div class="sidebar-task-row">
-            <div class="sidebar-task-url" :title="t.urls.join('\n')">{{ t.label }}</div>
-            <span class="sidebar-task-pct">
-              {{ t.progress }}%<template v-if="t.fileCount > 1"> · {{ t.fileDone }}/{{ t.fileCount }}</template>
-            </span>
-          </div>
-          <div class="sidebar-task-row">
-            <el-progress class="sidebar-task-bar" :percentage="t.progress" :show-text="false"
-              :color="t.status === 'running' ? ['#e892d0', '#9d7ce8'] : '#c9a7e8'" :stroke-width="6" />
-            <span class="sidebar-task-meta">
-              <template v-if="t.status === 'running'">{{ formatSize(t.speed) }}/s</template>
-              <template v-else>已结束</template>
-            </span>
-            <el-button size="small" type="danger" :disabled="t.status !== 'running'"
-              @click="stopTask(t.id)" :icon="Close" circle title="停止" />
+          <div class="seg">
+            <button class="seg-btn" :class="{ on: taskTab === 'active' }" @click="taskTab = 'active'">
+              进行中<template v-if="activeTaskCount"> {{ activeTaskCount }}</template>
+            </button>
+            <button class="seg-btn" :class="{ on: taskTab === 'history' }" @click="taskTab = 'history'">历史</button>
           </div>
         </div>
+        <template v-if="taskTab === 'active'">
+          <div v-if="!tasks.length" class="task-win-empty">还没有任务，去「下载」窗口添加吧 🌸</div>
+          <div v-for="t in tasks" :key="t.id" class="sidebar-task-item"
+               :class="{ 'sidebar-task-running': t.status === 'running' }">
+            <div class="sidebar-task-row">
+              <div class="sidebar-task-url" :title="t.urls.join('\n')">{{ t.label }}</div>
+              <span class="sidebar-task-pct">
+                {{ t.progress }}%<template v-if="t.fileCount > 1"> · {{ t.fileDone }}/{{ t.fileCount }}</template>
+              </span>
+            </div>
+            <div class="sidebar-task-row">
+              <el-progress class="sidebar-task-bar" :percentage="t.progress" :show-text="false"
+                :color="t.status === 'running' ? ['#e892d0', '#9d7ce8'] : '#c9a7e8'" :stroke-width="6" />
+              <span class="sidebar-task-meta">
+                <template v-if="t.status === 'running'">{{ formatSize(t.speed) }}/s</template>
+                <template v-else>已结束</template>
+              </span>
+              <el-button size="small" type="danger" :disabled="t.status !== 'running'"
+                @click="stopTask(t.id)" :icon="Close" circle title="停止" />
+            </div>
+            <div v-if="t.status === 'running'" class="sidebar-task-row sidebar-task-limit">
+              <span class="limit-label">限速</span>
+              <el-slider v-model="t.limitIdx" size="small" :min="0" :max="LIMITS.length - 1" :step="1"
+                :show-tooltip="false" @change="applyLimit(t)" />
+              <span class="limit-text" :class="{ off: t.limitIdx === 0 }">{{ LIMITS[t.limitIdx].label }}</span>
+            </div>
+          </div>
+        </template>
+        <HistoryView v-else />
       </div>
-    </MacWindow>
+      </MacWindow>
+    </Transition>
 
     <!-- 设置窗口 -->
-    <MacWindow v-if="wins.settings.open && !wins.settings.min" :win="wins.settings" title="设置"
-      @close="wins.settings.open = false" @minimize="wins.settings.min = true" @focus="focusWin('settings')">
-      <SettingsView />
-    </MacWindow>
+    <Transition name="mac">
+      <MacWindow v-if="wins.settings.open && !wins.settings.min" :win="wins.settings" title="设置"
+        @close="wins.settings.open = false" @minimize="wins.settings.min = true" @focus="focusWin('settings')">
+        <SettingsView />
+      </MacWindow>
+    </Transition>
+
+    <!-- 运行日志窗口 -->
+    <Transition name="mac">
+      <MacWindow v-if="wins.logs.open && !wins.logs.min" :win="wins.logs" title="运行日志"
+        @close="wins.logs.open = false" @minimize="wins.logs.min = true" @focus="focusWin('logs')">
+        <LogsView />
+      </MacWindow>
+    </Transition>
+
+    <!-- 插件中心窗口 -->
+    <Transition name="mac">
+      <MacWindow v-if="wins.plugins.open && !wins.plugins.min" :win="wins.plugins" title="插件中心"
+        @close="wins.plugins.open = false" @minimize="wins.plugins.min = true" @focus="focusWin('plugins')">
+        <PluginCenterView />
+      </MacWindow>
+    </Transition>
 
     <!-- 自定义右键菜单 -->
     <div v-if="ctx.show" class="ctx-menu" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
          @pointerdown.stop @contextmenu.prevent>
       <div class="ctx-item" @click="dockClick('download'); closeCtx()">下载</div>
       <div class="ctx-item" @click="dockClick('tasks'); closeCtx()">下载任务</div>
+      <div class="ctx-item" @click="dockClick('logs'); closeCtx()">运行日志</div>
+      <div class="ctx-item" @click="dockClick('plugins'); closeCtx()">插件中心</div>
       <div class="ctx-item" @click="dockClick('settings'); closeCtx()">设置</div>
       <div class="ctx-sep"></div>
       <div class="ctx-item" @click="reloadApp">重新加载</div>
@@ -66,17 +103,25 @@
 
     <!-- Dock -->
     <div class="dock" :style="{ zoom: dockZoom }">
-      <div class="dock-item" title="下载" @click="dockClick('download')">
+      <div class="dock-item" title="下载" @click="dockClick('download')" @dblclick="dockDblClick('download')">
         <el-icon :size="26"><VideoPlay /></el-icon>
         <i v-if="wins.download.open" class="dock-dot" :class="{ dim: wins.download.min }"></i>
       </div>
-      <div class="dock-item" title="下载任务" @click="dockClick('tasks')">
+      <div class="dock-item" title="下载任务" @click="dockClick('tasks')" @dblclick="dockDblClick('tasks')">
         <el-icon :size="26"><List /></el-icon>
         <i v-if="wins.tasks.open" class="dock-dot" :class="{ dim: wins.tasks.min }"></i>
       </div>
-      <div class="dock-item" title="设置" @click="dockClick('settings')">
+      <div class="dock-item" title="设置" @click="dockClick('settings')" @dblclick="dockDblClick('settings')">
         <el-icon :size="26"><Setting /></el-icon>
         <i v-if="wins.settings.open" class="dock-dot" :class="{ dim: wins.settings.min }"></i>
+      </div>
+      <div class="dock-item" title="运行日志" @click="dockClick('logs')" @dblclick="dockDblClick('logs')">
+        <el-icon :size="26"><Document /></el-icon>
+        <i v-if="wins.logs.open" class="dock-dot" :class="{ dim: wins.logs.min }"></i>
+      </div>
+      <div class="dock-item" title="插件中心" @click="dockClick('plugins')" @dblclick="dockDblClick('plugins')">
+        <el-icon :size="26"><Grid /></el-icon>
+        <i v-if="wins.plugins.open" class="dock-dot" :class="{ dim: wins.plugins.min }"></i>
       </div>
       <div class="dock-sep"></div>
       <div class="dock-status" :class="[ok ? 'ok' : 'warn', { checking }]"
@@ -94,9 +139,13 @@ import { ref, reactive, onMounted, computed } from "vue";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ElMessage } from "element-plus";
-import { Download, VideoPlay, Setting, Close, Refresh, List } from "@element-plus/icons-vue";
+import { Download, VideoPlay, Setting, Close, Refresh, List, Document, Grid } from "@element-plus/icons-vue";
 import DownloadView from "./views/Download.vue";
 import SettingsView from "./views/Settings.vue";
+import HistoryView from "./views/History.vue";
+import LogsView from "./views/Logs.vue";
+import PluginCenterView from "./views/PluginCenter.vue";
+import { openPluginWindow } from "./pluginWins";
 import MacWindow from "./components/MacWindow.vue";
 
 // ---------- macOS 风格浮动窗口管理 ----------
@@ -108,8 +157,13 @@ const wins = reactive<Record<string, WinState>>({
   download: { x: 70, y: 36, w: 780, h: 580, z: 1, open: false, min: false, max: false },
   tasks: { x: 880, y: 70, w: 350, h: 430, z: 2, open: false, min: false, max: false },
   settings: { x: 150, y: 70, w: 660, h: 620, z: 3, open: false, min: false, max: false },
+  logs: { x: 480, y: 130, w: 580, h: 400, z: 4, open: false, min: false, max: false },
+  plugins: { x: 220, y: 100, w: 640, h: 520, z: 5, open: false, min: false, max: false },
 });
 let zTop = 10;
+
+// 任务窗口页签：进行中 / 历史
+const taskTab = ref<"active" | "history">("active");
 
 // Dock 随应用窗口大小缩放（0.65 ~ 1）
 const dockZoom = ref(1);
@@ -138,12 +192,24 @@ function fitWin(w: WinState) {
   w.y = Math.min(Math.max(w.y, 8), Math.max(8, window.innerHeight - w.h - 96));
 }
 // Dock 点击：未开则打开，已最小化则还原，否则置顶
-function dockClick(k: string) {
+function realDockClick(k: string) {
   const w = wins[k];
   if (!w.open) { w.open = true; w.min = false; }
   else if (w.min) { w.min = false; }
   fitWin(w);
   focusWin(k);
+}
+// 单击延迟执行，给双击让路（双击 = 最小化）
+let dockTimer: number | null = null;
+function dockClick(k: string) {
+  if (dockTimer) { clearTimeout(dockTimer); dockTimer = null; }
+  dockTimer = window.setTimeout(() => { dockTimer = null; realDockClick(k); }, 260);
+}
+function dockDblClick(k: string) {
+  if (dockTimer) { clearTimeout(dockTimer); dockTimer = null; }
+  const w = wins[k];
+  if (!w.open || w.min) realDockClick(k); // 未开/已最小化：双击当作打开
+  else w.min = true;                       // 已开在前台：双击最小化
 }
 
 const ok = ref(false);
@@ -237,8 +303,22 @@ interface Task {
   speed: number; // KiB/s
   eta: number; // 秒
   peers: number;
+  limitIdx: number; // 限速档位（LIMITS 下标，0 = 不限）
   log: string[]; // 最近日志
 }
+
+// 限速档位（字节/秒）
+const LIMITS = [
+  { label: "不限", bytes: 0 },
+  { label: "128K", bytes: 131072 },
+  { label: "512K", bytes: 524288 },
+  { label: "1M", bytes: 1048576 },
+  { label: "2M", bytes: 2097152 },
+  { label: "5M", bytes: 5242880 },
+  { label: "10M", bytes: 10485760 },
+  { label: "20M", bytes: 20971520 },
+  { label: "50M", bytes: 52428800 },
+];
 
 const tasks = reactive<Task[]>([]);
 const activeTaskCount = computed(() => tasks.filter((t) => t.status === "running").length);
@@ -273,6 +353,15 @@ async function stopTask(id: string) {
   }
 }
 
+// 拖动限速滑块（松手时触发）：通过 aria2 RPC 立即生效
+async function applyLimit(t: Task) {
+  try {
+    await invoke("set_speed_limit", { id: t.id, bytes: LIMITS[t.limitIdx].bytes });
+  } catch (e) {
+    ElMessage.warning(`限速设置失败：${e}`);
+  }
+}
+
 // ---------- 事件监听 ----------
 
 onMounted(async () => {
@@ -285,6 +374,20 @@ onMounted(async () => {
     applyBg(await invoke("load_settings"));
   } catch { /* 忽略，使用默认 */ }
   await listen<string>("settings-changed", (ev) => applyBg(JSON.parse(ev.payload)));
+
+  // 0b) 响应速降球的「打开窗口」请求（显隐由设置持久化，Rust 侧统一管理）
+  await listen<string>("dropball-open", (ev) => {
+    try { dockClick(JSON.parse(ev.payload).target); } catch { /* 忽略 */ }
+  });
+
+  // 0c) 启动时自动打开已启用的第三方插件窗口
+  try {
+    interface PluginRow { id: string; name: string; builtin: boolean; enabled: boolean; entry_path: string; }
+    const list = await invoke<PluginRow[]>("list_plugins");
+    for (const p of list) {
+      if (p.enabled && !p.builtin) void openPluginWindow(p.id, p.entry_path, p.name);
+    }
+  } catch { /* 忽略 */ }
 
   // 1) 检测 aria2c
   try {
@@ -315,6 +418,7 @@ onMounted(async () => {
       speed: 0,
       eta: 0,
       peers: 0,
+      limitIdx: 0,
       log: [],
     });
     ElMessage.success("新下载任务已加入队列 (๑•̀ㅂ•́)و✧");
@@ -572,6 +676,24 @@ body {
   display: flex; justify-content: space-between;
   font-size: 12px; color: rgba(255, 255, 255, .85); padding: 0 2px;
 }
+/* 进行中 / 历史 分段切换 */
+.seg {
+  flex: 1; display: flex; gap: 4px; padding: 3px;
+  background: rgba(255, 255, 255, .12);
+  border: 1px solid rgba(255, 255, 255, .15);
+  border-radius: 10px;
+}
+.seg-btn {
+  flex: 1; border: none; cursor: pointer; padding: 5px 0;
+  border-radius: 8px; font-size: 12px;
+  background: transparent; color: rgba(255, 255, 255, .75);
+  transition: all .18s ease;
+}
+.seg-btn:hover { color: #fff; }
+.seg-btn.on {
+  background: rgba(255, 255, 255, .85); color: #6a4a7c; font-weight: 600;
+  box-shadow: 0 2px 8px rgba(60, 30, 90, .15);
+}
 .task-win-empty {
   padding: 26px 0; text-align: center; font-size: 13px;
   color: rgba(255, 255, 255, .8);
@@ -685,9 +807,17 @@ body {
   background: rgba(232,146,208,.12);
 }
 .sidebar-task-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* 限速滑块行 */
+.sidebar-task-limit { margin-top: 2px; }
+.sidebar-task-limit .el-slider { flex: 1; --el-slider-height: 4px; }
+.limit-label { flex: none; font-size: 11px; color: rgba(255, 255, 255, .65); }
+.limit-text { flex: none; min-width: 34px; font-size: 11px; text-align: right; color: #ffd7ef; }
+.limit-text.off { color: rgba(255, 255, 255, .45); }
 .sidebar-task-url { flex: 1; min-width: 0; font-size: 11px; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-task-pct { flex-shrink: 0; font-size: 11px; color: rgba(255,255,255,.75); font-family: Consolas, monospace; }
 .sidebar-task-bar { flex: 1; min-width: 0; }
+/* 空进度条的轨道调暗：0% 时别再像一根满条 */
+.sidebar-task-bar :deep(.el-progress-bar__outer) { background: rgba(255, 255, 255, .16) !important; }
 .sidebar-task-meta { flex: 0 0 56px; font-size: 10px; color: rgba(255,255,255,.75); text-align: right; overflow: hidden; white-space: nowrap; }
 .sidebar-task-actions { flex-shrink: 0; display: flex; gap: 4px; }
 .sidebar-task-actions .el-button { width: 20px; height: 20px; padding: 0; margin-left: 0 !important; }

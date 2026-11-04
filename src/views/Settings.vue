@@ -98,6 +98,7 @@
 <script setup lang="ts">
 import { reactive, ref, onMounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus";
 import { FolderOpened, Check, RefreshLeft, Delete } from "@element-plus/icons-vue";
@@ -114,6 +115,7 @@ interface Settings {
   bg_opacity: number;
   ui_opacity: number;
   close_to_tray: boolean;
+  plugins: Record<string, boolean>;
 }
 
 const s = reactive<Settings>({
@@ -128,6 +130,7 @@ const s = reactive<Settings>({
   bg_opacity: 0.5,
   ui_opacity: 1,
   close_to_tray: true,
+  plugins: {},
 });
 
 const fmtPct = (v: number) => Math.round(v * 100) + "%";
@@ -142,6 +145,13 @@ onMounted(async () => {
   } catch (e) {
     console.warn("load_settings failed", e);
   }
+  // 托盘切换速降球后会写回设置并发事件：只同步这一个字段，避免覆盖未保存的编辑
+  await listen<string>("settings-changed", (ev) => {
+    try {
+      const p = JSON.parse(ev.payload);
+      if (typeof p.show_drop_ball === "boolean") s.show_drop_ball = p.show_drop_ball;
+    } catch { /* 忽略 */ }
+  });
   recheck();
 });
 

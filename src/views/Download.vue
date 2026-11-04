@@ -23,7 +23,6 @@
         >
           开始下载
         </el-button>
-        <el-button size="large" round :icon="Delete" @click="clearLog">清空日志</el-button>
       </div>
     </div>
 
@@ -31,20 +30,15 @@
       <div class="panel-title">下载速度 ✿</div>
       <div class="chart-wrap" ref="chartEl" style="width: 100%; height: 200px"></div>
     </div>
-
-    <div class="panel" style="padding-bottom: 14px">
-      <div class="panel-title">运行日志 ✿</div>
-      <div class="log" ref="logEl">{{ logText }}</div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, nextTick, computed } from "vue";
+import { ref, reactive, onMounted, onUnmounted, nextTick } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { ElMessage } from "element-plus";
-import { VideoPlay, Delete } from "@element-plus/icons-vue";
+import { VideoPlay } from "@element-plus/icons-vue";
 // 按需引入，冷启动不加载整个 echarts
 import * as echarts from "echarts/core";
 import { LineChart } from "echarts/charts";
@@ -53,18 +47,12 @@ import { CanvasRenderer } from "echarts/renderers";
 echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
 
 const links = ref("");
-const logEl = ref<HTMLElement | null>(null);
 const chartEl = ref<HTMLElement | null>(null);
 
-const logText = ref("");
-let unlistenLog: UnlistenFn | null = null;
 let unlistenStats: UnlistenFn | null = null;
 let unlistenStarted: UnlistenFn | null = null;
 let chart: ReturnType<typeof echarts.init> | null = null;
 let chartObserver: ResizeObserver | null = null;
-
-// 当前关注的任务 id（用于日志过滤）
-const currentTaskId = ref<string | null>(null);
 
 // 下载速度/ETA 时序数据：按任务 id 分组，每个任务不同颜色
 const chartDatasets = reactive<Record<string, { time: string[]; speed: number[]; eta: number[] }>>({});
@@ -105,32 +93,12 @@ async function start() {
   if (!items.length) return;
 
   try {
-    logText.value = "";
-    currentTaskId.value = null;
-    nextTick(() => { updateChart(); });
-
     // Rust 侧返回 task_id
-    const id: string = await invoke("start_download", { urls: items });
-    currentTaskId.value = id;
+    await invoke("start_download", { urls: items });
     ElMessage.success("新下载任务已启动 (๑•̀ㅂ•́)و✧");
   } catch (e) {
     ElMessage.error(`启动失败：${e}`);
   }
-}
-
-function clearLog() {
-  logText.value = "";
-}
-
-function pushLog(id: string, text: string) {
-  // 只显示当前关注任务的日志（或没有指定任务时显示最近一条）
-  if (currentTaskId.value && currentTaskId.value !== id) return;
-  const line = text.replace(/\r/g, "").replace(/\n$/, "");
-  if (!line) return;
-  logText.value = logText.value ? logText.value + "\n" + line : line;
-  nextTick(() => {
-    if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight;
-  });
 }
 
 function initChart() {
@@ -269,16 +237,14 @@ onMounted(async () => {
     chartObserver.observe(chartEl.value);
   }
 
-  // 2) 新任务开始：记录当前任务 id（供图表/日志过滤）
+  // 2) 新任务开始：登记图例标签
   unlistenStarted = await listen<string>("download-started", (ev) => {
     const payload = JSON.parse(ev.payload);
-    currentTaskId.value = payload.id;
     if (payload.urls?.[0]) taskLabels[payload.id] = shortLabel(payload.urls[0]);
     // 为新任务准备数据集
     if (!chartDatasets[payload.id]) {
       chartDatasets[payload.id] = { time: [], speed: [], eta: [] };
     }
-    logText.value = "";
     nextTick(() => { updateChart(); });
   });
 
@@ -302,12 +268,6 @@ onMounted(async () => {
     }
     nextTick(() => { updateChart(); });
   });
-
-  // 4) 日志：驱动日志面板
-  unlistenLog = await listen<string>("download-log", (ev) => {
-    const payload = JSON.parse(ev.payload);
-    pushLog(payload.id, payload.text);
-  });
 });
 
 onUnmounted(() => {
@@ -315,7 +275,6 @@ onUnmounted(() => {
   chartObserver?.disconnect();
   unlistenStarted?.();
   unlistenStats?.();
-  unlistenLog?.();
   if (chart) chart.dispose();
 });
 </script>

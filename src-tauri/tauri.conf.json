@@ -18,6 +18,24 @@
         "height": 620,
         "resizable": true,
         "center": true
+      },
+      {
+        "label": "dropball",
+        "url": "index.html?win=dropball",
+        "title": "",
+        "width": 150,
+        "height": 134,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "closable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

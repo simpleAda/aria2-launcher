@@ -1,5 +1,5 @@
 <template>
-  <div class="mac-win" :class="{ max: win.max }" :style="winStyle" @pointerdown="emit('focus')">
+  <div class="mac-win" :class="{ max: win.max, moving }" :style="winStyle" @pointerdown="emit('focus')">
     <!-- 标题栏：红绿灯 + 标题，按住拖动 -->
     <div class="mac-win-bar" @pointerdown="startDrag" @dblclick="toggleMax">
       <div class="mac-lights">
@@ -15,7 +15,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive } from "vue";
+import { computed, reactive, ref } from "vue";
 
 interface WinState {
   x: number; y: number; w: number; h: number;
@@ -31,12 +31,16 @@ const winStyle = computed(() =>
     : { left: props.win.x + "px", top: props.win.y + "px", width: props.win.w + "px", height: props.win.h + "px", zIndex: props.win.z }
 );
 
+// 拖动/缩放进行中：关闭几何过渡，避免跟手延迟
+const moving = ref(false);
+
 // ---------- 拖动 ----------
 function startDrag(e: PointerEvent) {
   if (props.win.max) return;                    // 最大化时不拖动
   if ((e.target as HTMLElement).closest(".mac-light")) return; // 点到红绿灯不拖
   const bar = e.currentTarget as HTMLElement;
   bar.setPointerCapture(e.pointerId);
+  moving.value = true;
   const dx = e.clientX - props.win.x;
   const dy = e.clientY - props.win.y;
   const move = (ev: PointerEvent) => {
@@ -44,6 +48,7 @@ function startDrag(e: PointerEvent) {
     props.win.y = Math.min(Math.max(ev.clientY - dy, 0), window.innerHeight - 60);
   };
   const up = () => {
+    moving.value = false;
     bar.removeEventListener("pointermove", move);
     bar.removeEventListener("pointerup", up);
   };
@@ -55,6 +60,7 @@ function startDrag(e: PointerEvent) {
 function startResize(e: PointerEvent) {
   const handle = e.currentTarget as HTMLElement;
   handle.setPointerCapture(e.pointerId);
+  moving.value = true;
   const sw = props.win.w, sh = props.win.h;
   const sx = e.clientX, sy = e.clientY;
   const move = (ev: PointerEvent) => {
@@ -62,6 +68,7 @@ function startResize(e: PointerEvent) {
     props.win.h = Math.max(240, sh + ev.clientY - sy);
   };
   const up = () => {
+    moving.value = false;
     handle.removeEventListener("pointermove", move);
     handle.removeEventListener("pointerup", up);
   };
@@ -93,12 +100,18 @@ function toggleMax() {
   backdrop-filter: blur(16px) saturate(1.5) brightness(1.08);
   border: 1px solid rgba(255, 255, 255, .22);
   box-shadow: 0 16px 50px rgba(60, 30, 90, .28);
-  animation: macWinIn .18s ease;
+  transform-origin: 50% 100%; /* 动画以底部为轴，向 Dock 收放 */
+  transition: left .22s ease, top .22s ease, width .22s ease, height .22s ease; /* 最大化/还原平滑 */
 }
-@keyframes macWinIn {
-  from { opacity: 0; transform: scale(.96); }
-  to { opacity: 1; transform: none; }
+.mac-win.moving { transition: none; } /* 拖动/缩放跟手，不过渡 */
+
+/* mac 风出现/消失动画（配合 App.vue 的 <Transition name="mac">） */
+.mac-enter-active { transition: opacity .3s ease, transform .34s cubic-bezier(.22, 1.15, .32, 1); }
+.mac-leave-active {
+  transition: opacity .18s ease, transform .22s cubic-bezier(.5, 0, .75, 0);
+  pointer-events: none; /* 消失途中不挡点击 */
 }
+.mac-enter-from, .mac-leave-to { opacity: 0; transform: translateY(110px) scale(.8); }
 
 /* 标题栏 */
 .mac-win-bar {
